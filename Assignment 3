@@ -1,1 +1,360 @@
+import random
+import re
+import time
+from typing import Dict, Iterable, List, Set
 
+TITLES = {"dr", "mr", "mrs", "ms", "miss", "prof", "sri", "smt", "shri"}
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+class Contact:
+    """A raw contact as read from one source (phone 1, phone 2 or SIM)."""
+
+    def __init__(self, name: str = "", phones: Iterable[str] = (),
+                 emails: Iterable[str] = (), source: str = "") -> None:
+        self.name = name or ""
+        self.phones = list(phones or [])
+        self.emails = list(emails or [])
+        self.source = source
+
+
+# ---------------------------------------------------------------------------
+# Normalisation
+# ---------------------------------------------------------------------------
+def normalise_phone(raw: str) -> str:
+    """Keeps the last 10 digits, so '+91 98400 12345' == '09840012345'."""
+    digits = re.sub(r"\D", "", raw or "")
+    if len(digits) > 10:
+        digits = digits[-10:]
+    return digits
+
+
+def normalise_name(raw: str) -> str:
+    """Lower-cases, strips punctuation and titles: 'Dr. Ravi' -> 'ravi'."""
+    cleaned = re.sub(r"[^a-z\s]", " ", (raw or "").lower())
+    words = [w for w in cleaned.split() if w not in TITLES]
+    return " ".join(words)
+
+
+def normalise_email(raw: str) -> str:
+    return (raw or "").strip().lower()
+
+
+# ---------------------------------------------------------------------------
+# Merged record
+# ---------------------------------------------------------------------------
+class MergedContact:
+    def __init__(self) -> None:
+        self.names: Set[str] = set()
+        self.phones: Set[str] = set()
+        self.emails: Set[str] = set()
+
+    def absorb(self, other: "MergedContact") -> None:
+        self.names |= other.names
+        self.phones |= other.phones
+        self.emails |= other.emails
+
+    def display_name(self) -> str:
+        """Longest cleaned name is the most complete one."""
+        return max(self.names, key=lambda n: (len(n), n)).title() if self.names else "(no name)"
+
+    def as_tuple(self):
+        return (tuple(sorted(self.names)), tuple(sorted(self.phones)),
+                tuple(sorted(self.emails)))
+
+    def __repr__(self) -> str:
+        return (f"{self.display_name()} | names={sorted(self.names)} | "
+                f"phones={sorted(self.phones)} | emails={sorted(self.emails)}")
+
+
+# ---------------------------------------------------------------------------
+# The design: dictionary keyed by normalised number (e-mail as fallback key)
+# ---------------------------------------------------------------------------
+def merge_contacts(contacts: Iterable[Contact]) -> List[MergedContact]:
+    index: Dict[str, int] = {}              # normalised key -> record id
+    records: Dict[int, MergedContact] = {}  # record id -> merged contact
+    parent: Dict[int, int] = {}             # union-find over record ids
+    next_id = 0
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for contact in contacts:
+        phones = {normalise_phone(p) for p in contact.phones}
+        phones.discard("")
+        emails = {normalise_email(e) for e in contact.emails}
+        emails.discard("")
+        keys = {"p:" + p for p in phones} | {"e:" + e for e in emails}
+        name = normalise_name(contact.name)
+
+        # Find every existing record that shares at least one key.
+        hits = {find(index[k]) for k in keys if k in index}
+
+        if not hits:
+            rid = next_id
+            next_id += 1
+            parent[rid] = rid
+            records[rid] = MergedContact()
+        else:
+            rid = min(hits)
+            for other in hits - {rid}:      # contact bridges two records
+                parent[other] = rid
+                records[rid].absorb(records.pop(other))
+
+        record = records[rid]
+        if name:
+            record.names.add(name)
+        record.phones |= phones
+        record.emails |= emails
+        for k in keys:
+            index[k] = rid
+
+    return list(records.values())
+
+
+# ---------------------------------------------------------------------------
+# Alternative: compare every pair of contacts, O(n^2)
+# ---------------------------------------------------------------------------
+def merge_contacts_pairwise(contacts: List[Contact]) -> List[MergedContact]:
+    keysets = []
+    for c in contacts:
+        ks = {"p:" + normalise_phone(p) for p in c.phones if normalise_phone(p)}
+        ks |= {"e:" + normalise_email(e) for e in c.emails if normalise_email(e)}
+        keysets.append(ks)
+
+    n = len(contacts)
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(n):                       # every pair: n(n-1)/2 comparisons
+        for j in range(i + 1, n):
+            if keysets[i] & keysets[j]:
+                parent[find(j)] = find(i)
+
+    groups: Dict[int, MergedContact] = {}
+    for i, c in enumerate(contacts):
+        record = groups.setdefault(find(i), MergedContact())
+        name = normalise_name(c.name)
+        if name:
+            record.names.add(name)
+        record.phones |= {normalise_phone(p) for p in c.phones if normalise_phone(p)}
+        record.emails |= {normalise_email(e) for e in c.emails if normalise_email(e)}
+    return list(groups.values())
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: functional tests
+# ---------------------------------------------------------------------------
+def heading(title: str) -> None:
+    print("\n" + "=" * 72)
+    print(title)
+    print("=" * 72)
+
+
+def canonical(records: List[MergedContact]):
+    return sorted(r.as_tuple() for r in records)
+
+
+def test_formats_and_duplicates() -> None:
+    heading("Test 1: duplicates and different formats (R1, R2, R3)")
+    contacts = [
+        Contact("Dr. Ravi", ["+91 98400 12345"], ["ravi@mail.com"], "Phone 1"),
+        Contact("ravi kumar", ["9840012345"], [], "Phone 2"),
+        Contact("Ravi K.", ["098400-12345", "044 2345 6789"], [], "SIM"),
+        Contact("Anita", ["90030 11111"], ["anita@mail.com"], "Phone 1"),
+        Contact("ANITA S", ["+919003011111"], ["ANITA@MAIL.COM"], "SIM"),
+    ]
+    merged = merge_contacts(contacts)
+    for m in merged:
+        print(" ", m)
+    assert len(merged) == 2, "Expected exactly 2 people"
+    print("PASS: 5 raw contacts -> 2 people, no number or e-mail lost.")
+
+
+def test_missing_fields() -> None:
+    heading("Test 2: missing fields (R5)")
+    contacts = [
+        Contact("", ["9876543210"]),                       # no name
+        Contact("Karthik", [], ["karthik@mail.com"]),      # no phone
+        Contact("Karthik R", [], ["Karthik@mail.com"]),    # same e-mail
+        Contact("Lonely Name"),                            # no phone, no e-mail
+        Contact(),                                         # completely empty
+    ]
+    merged = merge_contacts(contacts)
+    for m in merged:
+        print(" ", m)
+    print(f"PASS: no crash; {len(contacts)} raw contacts -> {len(merged)} records.")
+
+
+def test_same_name_different_people() -> None:
+    heading("Test 3: two different people, same name (R4)")
+    contacts = [
+        Contact("Suresh Kumar", ["9111111111"]),
+        Contact("Suresh Kumar", ["9222222222"]),
+    ]
+    merged = merge_contacts(contacts)
+    for m in merged:
+        print(" ", m)
+    assert len(merged) == 2
+    print("PASS: same name, different numbers -> kept as 2 people.")
+
+
+def test_bridging() -> None:
+    heading("Test 4: a contact that bridges two records")
+    contacts = [
+        Contact("Meena", ["9000000001"]),
+        Contact("Meena S", ["9000000002"]),
+        Contact("Meena Sundar", ["9000000001", "9000000002"]),
+    ]
+    merged = merge_contacts(contacts)
+    for m in merged:
+        print(" ", m)
+    assert len(merged) == 1
+    print("PASS: bridging contact joined two records into one person.")
+
+
+def test_by_hand() -> None:
+    heading("Verification: small list merged by hand")
+    contacts = [
+        Contact("Dr. Ravi", ["+91 98400 12345"], ["ravi@x.com"]),
+        Contact("ravi kumar", ["9840012345"], ["r.kumar@y.com"]),
+        Contact("Latha", ["9444411111"]),
+        Contact("Latha M", ["+91 94444 11111"], ["latha@x.com"]),
+        Contact("Sam", ["9555522222"]),
+    ]
+    # Worked by hand:
+    #   Ravi  : names {ravi, ravi kumar}, phone {9840012345},
+    #           emails {r.kumar@y.com, ravi@x.com}
+    #   Latha : names {latha, latha m}, phone {9444411111}, emails {latha@x.com}
+    #   Sam   : names {sam}, phone {9555522222}, no e-mail
+    expected = sorted([
+        (("ravi", "ravi kumar"), ("9840012345",), ("r.kumar@y.com", "ravi@x.com")),
+        (("latha", "latha m"), ("9444411111",), ("latha@x.com",)),
+        (("sam",), ("9555522222",), ()),
+    ])
+    result = canonical(merge_contacts(contacts))
+    for row in result:
+        print(" ", row)
+    assert result == expected, "Result differs from the hand-merged answer"
+    print("PASS: program output equals the hand-merged result.")
+
+
+# ---------------------------------------------------------------------------
+# Stage 3: performance measurement
+# ---------------------------------------------------------------------------
+def generate_contacts(n: int, duplicate_ratio: float = 0.3, seed: int = 42) -> List[Contact]:
+    """Generates n contacts; about duplicate_ratio of them repeat an earlier
+    person with a different number format and name spelling."""
+    rng = random.Random(seed)
+    first = ["Ravi", "Anita", "Karthik", "Meena", "Suresh", "Latha", "Arun", "Divya"]
+    last = ["Kumar", "Sharma", "Iyer", "Nair", "Reddy", "Das", "Rao", "Menon"]
+    formats = ["{}", "+91 {}", "+91{}", "0{}", "{} {}"]
+    people = []
+    contacts = []
+    for _ in range(n):
+        if people and rng.random() < duplicate_ratio:
+            base = rng.choice(people)
+        else:
+            base = (rng.randint(6_000_000_000, 9_999_999_999),
+                    f"{rng.choice(first)} {rng.choice(last)}")
+            people.append(base)
+        number = str(base[0])
+        fmt = rng.choice(formats)
+        shown = fmt.format(number[:5], number[5:]) if fmt.count("{}") == 2 else fmt.format(number)
+        name = rng.choice(["Dr. ", "", "Mr. "]) + base[1].lower()
+        contacts.append(Contact(name, [shown], [f"{base[1].split()[0].lower()}{base[0] % 97}@mail.com"]))
+    return contacts
+
+
+def timed(function, data) -> float:
+    start = time.perf_counter()
+    function(data)
+    return time.perf_counter() - start
+
+
+def measure() -> None:
+    heading("Measurement: dictionary design vs pairwise comparison")
+    print(f"{'n':>9} {'dictionary (s)':>16} {'pairwise (s)':>14} {'speed-up':>10} {'people':>9}")
+    print("-" * 62)
+
+    dict_times = {}
+    for n in (1_000, 100_000):
+        data = generate_contacts(n)
+        dict_times[n] = timed(merge_contacts, data)
+        people = len(merge_contacts(data))
+
+        if n == 1_000:
+            pair_time = timed(merge_contacts_pairwise, data)
+            same = canonical(merge_contacts(data)) == canonical(merge_contacts_pairwise(data))
+            speed = f"{pair_time / dict_times[n]:,.0f}x"
+            print(f"{n:>9,} {dict_times[n]:>16.4f} {pair_time:>14.4f} {speed:>10} {people:>9,}")
+            print(f"{'':>9} (both methods give identical results: {same})")
+        else:
+            # Pairwise at 100,000 needs ~5 billion comparisons: estimate, do not run.
+            estimate = pair_time * (n / 1_000) ** 2
+            speed = f"{estimate / dict_times[n]:,.0f}x"
+            print(f"{n:>9,} {dict_times[n]:>16.4f} {'~' + format(estimate, ',.0f'):>14} {speed:>10} {people:>9,}")
+            print(f"{'':>9} (pairwise time ESTIMATED from the n^2 trend, not run)")
+
+    ratio = dict_times[100_000] / dict_times[1_000]
+    print(f"\nData growth 1,000 -> 100,000 = 100x")
+    print(f"Dictionary time growth       = {ratio:.0f}x  (about linear, O(n) average)")
+    print(f"Pairwise time growth (n^2)   = 10,000x  (O(n^2))")
+    print("""
+Space: dictionary design uses O(n) (index + sets). Pairwise uses O(n) for the
+       key sets as well, but needs n(n-1)/2 comparisons:
+       n = 1,000   -> about 499,500 comparisons
+       n = 100,000 -> about 4,999,950,000 comparisons""")
+
+
+# ---------------------------------------------------------------------------
+# Stage 4: defence of the design
+# ---------------------------------------------------------------------------
+def defend() -> None:
+    heading("Stage 4: Defend the design")
+    print("""\
+1. Why a dictionary beats comparing every pair
+   A dictionary lookup takes O(1) on average, so each contact is checked
+   against all earlier contacts in one step. Pairwise comparison checks
+   n(n-1)/2 pairs, i.e. O(n^2). Measured above: 100x more contacts cost the
+   dictionary about 100x more time but the pairwise method about 10,000x.
+
+2. Two different people with the same name
+   The name is never used as the identity key. People are identified by
+   their normalised phone number (or e-mail as a fallback), so 'Suresh Kumar'
+   with 9111111111 and 'Suresh Kumar' with 9222222222 stay as two records
+   (Test 3). Names are only collected in a set for display.
+
+3. Remaining limitation
+   Contacts with no phone number and no e-mail cannot be matched at all, so
+   duplicates that differ only in name spelling ('Dr. Ravi' vs 'ravi kumar'
+   with no numbers) remain separate. Also, a shared landline or family number
+   can wrongly merge two real people, and numbers with non-Indian formats
+   are trimmed to their last 10 digits.""")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main() -> None:
+    test_formats_and_duplicates()
+    test_missing_fields()
+    test_same_name_different_people()
+    test_bridging()
+    test_by_hand()
+    measure()
+    defend()
+
+
+if __name__ == "__main__":
+    main()
