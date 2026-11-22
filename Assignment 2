@@ -1,1 +1,394 @@
+import sys
+import threading
+import time
+from collections import Counter
+from functools import lru_cache
 
+# ---------------------------------------------------------------------------
+# Call counter shared by the instrumented functions
+# ---------------------------------------------------------------------------
+calls = 0
+
+
+# ---------------------------------------------------------------------------
+# Three implementations
+# ---------------------------------------------------------------------------
+def ways_naive(n):
+    """Ways to climb n temple steps taking 1 or 2 steps at a time (plain recursion)."""
+    global calls
+    calls += 1
+    if n <= 1:
+        return 1
+    return ways_naive(n - 1) + ways_naive(n - 2)
+
+
+@lru_cache(maxsize=None)
+def ways_memo(n):
+    """Same recurrence, but each distinct n is computed only once (memoisation)."""
+    global calls
+    calls += 1
+    # TODO 1 (completed): same base case and recursive case as ways_naive
+    if n <= 1:
+        return 1
+    return ways_memo(n - 1) + ways_memo(n - 2)
+
+
+def ways_memo_dict(n, cache=None):
+    """Memoisation with an explicit dictionary (alternative to lru_cache)."""
+    if cache is None:
+        cache = {}
+    if n <= 1:
+        return 1
+    if n not in cache:
+        cache[n] = ways_memo_dict(n - 1, cache) + ways_memo_dict(n - 2, cache)
+    return cache[n]
+
+
+def ways_iterative(n):
+    """Bottom-up loop keeping only the last two values: O(n) time, O(1) space."""
+    previous, current = 1, 1
+    for _ in range(2, n + 1):
+        previous, current = current, previous + current
+    return current
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def count_naive(n):
+    """Run ways_naive(n) and return (result, number_of_calls)."""
+    global calls
+    calls = 0
+    result = ways_naive(n)
+    return result, calls
+
+
+def count_memo(n):
+    """Run ways_memo(n) from a cold cache and return (result, number_of_calls)."""
+    global calls
+    ways_memo.cache_clear()
+    calls = 0
+    result = ways_memo(n)
+    return result, calls
+
+
+def heading(title):
+    print("\n" + "=" * 72)
+    print(title)
+    print("=" * 72)
+
+
+# ---------------------------------------------------------------------------
+# Q6 (a): call tree for n = 5
+# ---------------------------------------------------------------------------
+def print_call_tree(n, depth=0, counter=None):
+    """Prints the recursion tree of the plain version and tallies repeated calls."""
+    if counter is not None:
+        counter[n] += 1
+    print("    " * depth + f"ways({n})")
+    if n <= 1:
+        return
+    print_call_tree(n - 1, depth + 1, counter)
+    print_call_tree(n - 2, depth + 1, counter)
+
+
+def demo_call_tree(n=5):
+    heading(f"Q6: Call tree for ways_naive({n})")
+    tally = Counter()
+    print_call_tree(n, counter=tally)
+    print(f"\nTotal calls for n = {n}: {sum(tally.values())}")
+    print("Times each sub-problem was computed (the repetition):")
+    for k in sorted(tally, reverse=True):
+        note = "  <- repeated" if tally[k] > 1 else ""
+        print(f"  ways({k}) computed {tally[k]} time(s){note}")
+
+
+# ---------------------------------------------------------------------------
+# Q6 (b): correctness check, n = 1..6
+# ---------------------------------------------------------------------------
+def demo_correctness():
+    heading("Q6: Correctness check for n = 1 to 6 (hand-worked answers)")
+    # Worked by hand: ways(1)=1 | ways(2)=1+1=2 | ways(3)=2+1=3
+    #                 ways(4)=3+2=5 | ways(5)=5+3=8 | ways(6)=8+5=13
+    expected = {1: 1, 2: 2, 3: 3, 4: 5, 5: 8, 6: 13}
+    print(f"{'n':>3} {'hand':>6} {'naive':>7} {'memo':>7} {'loop':>7}  status")
+    all_ok = True
+    for n, hand in expected.items():
+        naive = ways_naive(n)
+        memo = ways_memo(n)
+        loop = ways_iterative(n)
+        ok = hand == naive == memo == loop
+        all_ok &= ok
+        print(f"{n:>3} {hand:>6} {naive:>7} {memo:>7} {loop:>7}  {'OK' if ok else 'MISMATCH'}")
+    print("\nAll values verified." if all_ok else "\nVerification FAILED.")
+
+
+# ---------------------------------------------------------------------------
+# Q6 (c): given expected output for n = 25
+# ---------------------------------------------------------------------------
+def demo_expected_output():
+    heading("Q6: Program output for n = 25")
+    global calls
+    calls = 0
+    print("naive:", ways_naive(25), "calls =", calls)
+    ways_memo.cache_clear()
+    calls = 0
+    print("memo :", ways_memo(25), "calls =", calls)
+    print("\nExpected output:")
+    print("naive: 121393 calls = 242785")
+    print("memo : 121393 calls = 26")
+
+
+# ---------------------------------------------------------------------------
+# Q6 (d): growth investigation, n = 10, 20, 25, 30
+# ---------------------------------------------------------------------------
+def demo_growth():
+    heading("Q6: Growth investigation (prediction vs measurement)")
+    print("Prediction: naive calls = 2 * ways(n) - 1  (grows ~ 1.618^n)")
+    print("            memo calls  = n + 1            (grows linearly)\n")
+    header = (f"{'n':>4} {'naive calls':>13} {'predicted':>11} "
+              f"{'memo calls':>11} {'predicted':>10} {'ratio':>10}")
+    print(header)
+    print("-" * len(header))
+    for n in (10, 20, 25, 30):
+        _, naive_calls = count_naive(n)
+        _, memo_calls = count_memo(n)
+        pred_naive = 2 * ways_iterative(n) - 1
+        pred_memo = n + 1
+        ratio = naive_calls / memo_calls
+        print(f"{n:>4} {naive_calls:>13,} {pred_naive:>11,} "
+              f"{memo_calls:>11} {pred_memo:>10} {ratio:>10,.0f}x")
+    print("\nConclusion: measured counts match the prediction exactly. "
+          "Each +1 in n multiplies naive calls by ~1.618 (the golden ratio).")
+
+
+# ---------------------------------------------------------------------------
+# Q6 (e): deployment decision, n = 1000 and the recursion limit
+# ---------------------------------------------------------------------------
+def demo_recursion_limit():
+    heading("Q6: Deployment decision, ways_memo(1000) and sys.getrecursionlimit()")
+    limit = sys.getrecursionlimit()
+    print(f"Default recursion limit: {limit}")
+    ways_memo.cache_clear()
+    try:
+        ways_memo(1000)
+        print("ways_memo(1000) succeeded (the limit was not hit in this environment).")
+    except RecursionError as error:
+        print(f"RecursionError: {error}")
+        print("Reason: from a cold cache, ways_memo(1000) recurses 1000 levels deep "
+              "(1000 -> 999 -> ... -> 1)")
+        print("        before any value is cached. Together with the frames already "
+              "on the stack, the depth exceeds the limit.")
+
+    # Option 1: raise the limit (run in a thread with a bigger C stack for safety).
+    print("\nOption 1: raise the limit with sys.setrecursionlimit(5000)")
+    holder = {}
+
+    def worker():
+        sys.setrecursionlimit(5000)
+        ways_memo.cache_clear()
+        holder["value"] = ways_memo(1000)
+
+    try:
+        threading.stack_size(64 * 1024 * 1024)
+    except (ValueError, RuntimeError):
+        pass
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    sys.setrecursionlimit(limit)
+    if "value" in holder:
+        digits = str(holder["value"])
+        print(f"  ways(1000) = {digits[:20]}... ({len(digits)} digits)")
+    else:
+        print("  The raised limit still failed on this machine (C stack too small).")
+
+    # Option 2: rewrite with a loop (no recursion at all).
+    print("\nOption 2: rewrite with a loop (ways_iterative)")
+    loop_value = ways_iterative(1000)
+    print(f"  ways(1000) = {str(loop_value)[:20]}... ({len(str(loop_value))} digits)")
+    if "value" in holder:
+        print(f"  Both approaches agree: {holder['value'] == loop_value}")
+
+    print("\nDecision: use the loop for deployment. Raising the limit only moves "
+          "the ceiling and risks a")
+    print("hard crash (stack overflow) if n is larger; the loop uses O(1) stack "
+          "and O(1) extra memory.")
+    print("Keep the memoised version for clarity where depth is known to be small.")
+
+
+# ---------------------------------------------------------------------------
+# Q6 (f): complexity analysis, all three versions for n = 1000
+# ---------------------------------------------------------------------------
+def demo_complexity():
+    heading("Q6: Time and space analysis")
+    print(f"{'Version':<18}{'Time':<10}{'Space':<28}")
+    print(f"{'Plain recursion':<18}{'O(phi^n)':<10}{'O(n) call stack':<28}")
+    print(f"{'Memoised':<18}{'O(n)':<10}{'O(n) cache + O(n) stack':<28}")
+    print(f"{'Loop (2 values)':<18}{'O(n)':<10}{'O(1)':<28}")
+
+    print("\nRunning all three for n = 1000:")
+    start = time.perf_counter()
+    loop_value = ways_iterative(1000)
+    loop_time = time.perf_counter() - start
+
+    holder = {}
+
+    def worker():
+        sys.setrecursionlimit(5000)
+        ways_memo.cache_clear()
+        start_memo = time.perf_counter()
+        holder["value"] = ways_memo(1000)
+        holder["time"] = time.perf_counter() - start_memo
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    sys.setrecursionlimit(1000)
+
+    print(f"  Loop     : {loop_time * 1000:.4f} ms")
+    if "value" in holder:
+        print(f"  Memoised : {holder['time'] * 1000:.4f} ms "
+              f"(matches loop: {holder['value'] == loop_value})")
+    print("  Naive    : not run, it would need about 2 * ways(1000) calls, "
+          "roughly 10^209. It would never finish.")
+
+
+# ---------------------------------------------------------------------------
+# Q7: Diagnose, Redesign and Validate (chosen program: ways_naive)
+# ---------------------------------------------------------------------------
+def q7_diagnosis():
+    heading("Q7-A: Diagnose the bottleneck (evidence from ways_naive)")
+    tally = Counter()
+
+    def traced(n):
+        tally[n] += 1
+        if n <= 1:
+            return 1
+        return traced(n - 1) + traced(n - 2)
+
+    traced(20)
+    total = sum(tally.values())
+    distinct = len(tally)
+    print(f"For n = 20: total calls = {total:,}, distinct sub-problems = {distinct}")
+    print(f"Wasted (repeated) calls = {total - distinct:,} "
+          f"({(total - distinct) / total:.2%} of all work)")
+    print("Most repeated sub-problems:")
+    for k, c in tally.most_common(5):
+        print(f"  ways({k}) computed {c:,} times")
+    print("\nDiagnosis: the same overlapping sub-problems are recomputed again "
+          "and again;")
+    print("the call count grows exponentially (~1.618^n) while only n + 1 "
+          "distinct values exist.")
+
+
+def q7_objective():
+    heading("Q7-B: Design objective")
+    print("Reduce calls/operations for n = 30 from about 2.7 million to at "
+          "most n + 1 = 31,")
+    print("so that runtime grows linearly in n, with identical results for "
+          "every n tested.")
+
+
+def q7_design():
+    heading("Q7-C: Revised solution (pseudocode)")
+    print("""\
+Property exploited: overlapping sub-problems (ways(n) depends only on
+ways(n-1) and ways(n-2), and each value is reused many times).
+
+Pseudocode (bottom-up, constant extra memory):
+    function ways_iterative(n):
+        previous <- 1
+        current  <- 1
+        for i from 2 to n:
+            previous, current <- current, previous + current
+        return current
+
+Pseudocode (memoised variant):
+    function ways_memo(n):
+        if n <= 1: return 1
+        if n in cache: return cache[n]
+        cache[n] <- ways_memo(n-1) + ways_memo(n-2)
+        return cache[n]
+
+Memory / trade-offs:
+    memoised : O(n) extra memory, depth-limited by the recursion limit
+    loop     : O(1) extra memory, no recursion limit, less 'readable' recurrence
+""")
+
+
+def q7_predict():
+    heading("Q7-D: Prediction before implementing")
+    print("Prediction: for n = 30, calls fall from 2,692,537 to 31 (about "
+          "87,000x fewer),")
+    print("and runtime falls from hundreds of ms to microseconds. "
+          "For n <= 5, the gain should be negligible.")
+
+
+def q7_validate():
+    heading("Q7-E: Implement and validate (same inputs, same counts, same timing)")
+    header = (f"{'n':>4} {'naive calls':>13} {'memo calls':>11} "
+              f"{'naive ms':>11} {'memo ms':>9} {'loop ms':>9} {'same?':>6}")
+    print(header)
+    print("-" * len(header))
+    for n in (5, 10, 20, 25, 30):
+        start = time.perf_counter()
+        naive_value, naive_calls = count_naive(n)
+        naive_time = (time.perf_counter() - start) * 1000
+
+        start = time.perf_counter()
+        memo_value, memo_calls = count_memo(n)
+        memo_time = (time.perf_counter() - start) * 1000
+
+        start = time.perf_counter()
+        loop_value = ways_iterative(n)
+        loop_time = (time.perf_counter() - start) * 1000
+
+        same = naive_value == memo_value == loop_value
+        print(f"{n:>4} {naive_calls:>13,} {memo_calls:>11} "
+              f"{naive_time:>11.4f} {memo_time:>9.4f} {loop_time:>9.4f} "
+              f"{str(same):>6}")
+
+
+def q7_defend():
+    heading("Q7-F: Defend the final design")
+    print("""\
+Objective achieved : yes. Calls fell from exponential to n + 1 and every
+                     result matched the original.
+Size of improvement: at n = 30 the call count dropped by roughly 87,000x;
+                     the gap widens with every extra step.
+New costs          : memoised version stores n + 1 values and is still limited
+                     by recursion depth; the loop version avoids both costs.
+Where original may
+still be preferable: for very small n (about 5 or less) the difference is
+                     unmeasurable, and the plain recursion maps most directly
+                     onto the mathematical definition, which helps teaching
+                     and quick prototypes.
+Conclusion         : adopt the loop in production and keep the naive version
+                     only as a readable reference or test oracle.
+""")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main():
+    # ---- Q6 ----
+    demo_call_tree(5)
+    demo_correctness()
+    demo_expected_output()
+    demo_growth()
+    demo_recursion_limit()
+    demo_complexity()
+
+    # ---- Q7 ----
+    q7_diagnosis()
+    q7_objective()
+    q7_design()
+    q7_predict()
+    q7_validate()
+    q7_defend()
+
+
+if __name__ == "__main__":
+    main()
