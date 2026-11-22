@@ -1,1 +1,475 @@
+def _score_words(words):
+    """+1 per positive word, -1 per negative word; a preceding negator flips it."""
+    total = 0
+    for i, word in enumerate(words):
+        # TODO 1 (completed): value of each word, flipped if previous word is a negator
+        value = 1 if word in POSITIVE else -1 if word in NEGATIVE else 0
+        if value != 0 and i > 0 and words[i - 1] in NEGATORS:
+            value = -value
+        total += value
+    return total
 
+
+def score(text):
+    """+1 per positive word, -1 per negative word; a preceding negator flips it."""
+    words = text.lower().replace(".", " ").replace(",", " ").split()
+    return _score_words(words)
+
+
+def score_regex(text):
+    """Same logic, but tokenises with a regex so '!', '?', ';' do not stick to words."""
+    return _score_words(re.findall(r"[a-z']+", text.lower()))
+
+
+def to_label(s):
+    return "positive" if s > 0 else "negative" if s < 0 else "neutral"
+
+
+def label(text):
+    return to_label(score(text))
+
+
+def label_regex(text):
+    return to_label(score_regex(text))
+
+
+# ---------------------------------------------------------------------------
+# B4.1 (b): summarisers
+# ---------------------------------------------------------------------------
+def tokens(text):
+    return re.findall(r"[a-z']+", text.lower())
+
+
+def sentences_iter(text):
+    """Lazily yields sentences, so a caller needing only the first k pays only for k."""
+    for match in re.finditer(r"[^.!?]+[.!?]*", text):
+        sentence = match.group().strip()
+        if sentence:
+            yield sentence
+
+
+def content_words(text):
+    return [w for w in tokens(text) if w not in STOPWORDS and len(w) > 2]
+
+
+def summarise_frequency(text, k=1):
+    """Keeps the k sentences holding the most frequent important words.
+    Time O(words + s log s) for s sentences; space O(unique words)."""
+    sents = list(sentences_iter(text))
+    if len(sents) <= k:
+        return " ".join(sents)
+    freq = Counter(content_words(text))
+    ranked = []
+    for i, sentence in enumerate(sents):
+        distinct = {w for w in content_words(sentence)}
+        ranked.append((sum(freq[w] for w in distinct), -i, i))   # ties -> earlier
+    best = sorted(ranked, reverse=True)[:k]
+    return " ".join(sents[i] for i in sorted(idx for _, _, idx in best))
+
+
+def summarise_first_k(text, k=1):
+    """Alternative: the first k sentences. Time O(k) regardless of text length."""
+    return " ".join(islice(sentences_iter(text), k))
+
+
+def coverage(summary, text):
+    """Share of the complaint's important-word weight captured by the summary
+    (each distinct content word weighted by how often it occurs in the complaint)."""
+    freq = Counter(content_words(text))
+    total = sum(freq.values())
+    if total == 0:
+        return 1.0
+    covered = sum(freq[w] for w in set(content_words(summary)))
+    return covered / total
+
+
+# ---------------------------------------------------------------------------
+# 58 complaints with MY OWN reading of each one (positive / negative / neutral)
+# ---------------------------------------------------------------------------
+COMPLAINTS = [
+    # --- positive ---
+    ("The new bus shelter is clean and the staff were helpful. Buses now run fast and on time.", "positive"),
+    ("Service has improved a lot this month. The ticket counter is fast and the platform is clean.", "positive"),
+    ("Very helpful guard at Gate 2. He guided my mother to the right train.", "positive"),
+    ("The station is clean now. Thank you for the improved lighting.", "positive"),
+    ("Good work on the new escalator. It is fast and the lift is working.", "positive"),
+    ("The announcement system is much improved. Delays are clearly explained.", "positive"),
+    ("Clean toilets and helpful attendants at the main terminal. The queue was short.", "positive"),
+    ("I am happy with the fast refund process. The helpline agent was polite.", "positive"),
+    ("The staff were helpful during the rush hour. Crowd control was good.", "positive"),
+    ("Not bad at all, the waiting hall is clean now. Fans were repaired.", "positive"),
+    ("Platform cleaning has improved. The washrooms are clean and well lit.", "positive"),
+    ("Good service at the information desk. The employee was helpful and patient.", "positive"),
+    ("Boarding was fast and smooth. Thanks to the helpful volunteers.", "positive"),
+    ("The new app is good and the booking is fast. No delays so far.", "positive"),
+    ("Station looks clean after the repainting. A great improvement for commuters.", "positive"),
+    ("Bus frequency improved on route 21. Drivers are polite and helpful.", "positive"),
+    ("The metro feeder service is fast and reliable. Keep it up!", "positive"),
+    ("I never expected such a clean station. The staff were helpful too.", "positive"),
+    ("Good lighting and clean stairs at the subway. I feel safe at night.", "positive"),
+    ("Excellent behaviour by the conductor. He returned my lost bag, very helpful.", "positive"),
+    # --- negative ---
+    ("The platform is dirty and the toilets are broken. Nobody cleans them.", "negative"),
+    ("Bus was slow and the driver was rude. I reached office late.", "negative"),
+    ("Smoke from the factory near the station makes it hard to breathe. The air is bad.", "negative"),
+    ("The ticket counter is slow. Staff are not helpful and the queue is long.", "negative"),
+    ("Waiting hall is dirty. Bad smell all day and no drinking water.", "negative"),
+    ("The escalator is broken again. It has been broken for two weeks.", "negative"),
+    ("Very rude behaviour by the ticket checker. He shouted at senior citizens.", "negative"),
+    ("Buses are slow in the evening. We wait for an hour at the stop.", "negative"),
+    ("The toilets stink and the floor is wet. Nobody has cleaned it today.", "negative"),
+    ("Trains were late three days in a row. No announcements were made.", "negative"),
+    ("The lift is out of order. Elderly passengers cannot reach the platform.", "negative"),
+    ("Fans in the waiting hall do not work. It is very hot and crowded.", "negative"),
+    ("Pickpockets are active near the exit gate. Please increase police patrols.", "negative"),
+    ("Smoke is coming from the diesel generator. The air near platform 3 is bad.", "negative"),
+    ("Dirty water on the platform. The drain is broken and smells.", "negative"),
+    ("The new app is not good. Booking fails and refund is slow.", "negative"),
+    ("Staff were not helpful at the help desk. They were rude and ignored us.", "negative"),
+    ("The platform is never clean. Garbage is thrown everywhere.", "negative"),
+    ("The signal board is broken. Passengers get wrong information.", "negative"),
+    ("Bus stop has no shelter and no seating. People wait in the rain.", "negative"),
+    ("Air is bad near the bus depot because of smoke. Many children are coughing.", "negative"),
+    ("Slow and dirty service at the canteen. The food was cold.", "negative"),
+    ("The parking area is dirty and the staff are rude. Nobody answered our complaint.", "negative"),
+    ("Auto drivers refuse to use the meter. They demand extra money at night.", "negative"),
+    ("Great, another delay. The helpful announcement says the train is late by two hours.", "negative"),
+    ("Not a single clean toilet at the station. Not good for a big junction.", "negative"),
+    ("The ticket machine is broken and the counter is slow. Please fix it.", "negative"),
+    ("The helpline number in the app does not connect. Please share another number.", "negative"),
+    # --- neutral ---
+    ("Please share the timetable for route 45. I could not find it on the website.", "neutral"),
+    ("Request for a new bus stop near the college. Many students travel from there.", "neutral"),
+    ("Which platform will the Chennai train arrive at? The board shows no details.", "neutral"),
+    ("I want to know the lost property office timings. Kindly reply by email.", "neutral"),
+    ("Is there a monthly pass for senior citizens? Please share the fare chart.", "neutral"),
+    ("Please extend the metro timing on weekends. Events end late in the city.", "neutral"),
+    ("A suggestion to add a ramp at Gate 4. Wheelchair users need more space.", "neutral"),
+    ("Kindly confirm the refund status for my cancelled ticket. The booking id is attached.", "neutral"),
+    ("Not sure whether the pass is valid in AC buses. Please clarify.", "neutral"),
+    ("The staff were helpful but the platform is dirty. Overall a mixed experience.", "neutral"),
+]
+
+EXPECTED_DEMO = [
+    ("positive", "Roads are clean and the bus was fast."),
+    ("negative", "Smoke from the factory, air is bad."),
+    ("negative", "The staff were not helpful."),
+    ("positive", "Not bad, service improved."),
+]
+
+
+def heading(title):
+    print("\n" + "=" * 74)
+    print(title)
+    print("=" * 74)
+
+
+# ---------------------------------------------------------------------------
+# Run the given program and compare to the expected output
+# ---------------------------------------------------------------------------
+def demo_expected_output():
+    heading("Complete the Code: output of the given program")
+    ok = True
+    for expected_label, c in EXPECTED_DEMO:
+        got = label(c)
+        print(f"{got:8} | {c}")
+        ok &= (got == expected_label)
+    print("\nMatches the expected output." if ok else "\nDOES NOT match expected output.")
+    assert ok
+
+
+# ---------------------------------------------------------------------------
+# B4.1: agreement with my own reading + wrong-label analysis
+# ---------------------------------------------------------------------------
+def diagnose(text):
+    """Programmatic reason why a lexicon scorer can get a complaint wrong."""
+    words = tokens(text)
+    hits = [w for w in words if w in POSITIVE or w in NEGATIVE]
+    if not hits:
+        return "no lexicon word present (vocabulary gap: the meaning is expressed in other words)"
+    if any(w in NEGATORS for w in words):
+        return ("negation scope: only the single word right after a negator is flipped, "
+                "so 'not a single clean ...' is read as positive")
+    pos = [w for w in hits if w in POSITIVE]
+    neg = [w for w in hits if w in NEGATIVE]
+    if pos and neg:
+        return "mixed positive and negative words cancel each other out"
+    return "words are found but the meaning differs from the words (sarcasm / context)"
+
+
+def agreement(scorer_label, data):
+    same = sum(1 for text, mine in data if scorer_label(text) == mine)
+    return same, len(data)
+
+
+def study_agreement():
+    heading("B4.1: Sentiment scorer vs my own reading (58 complaints)")
+    assert len(COMPLAINTS) >= 50
+    same, total = agreement(label, COMPLAINTS)
+    same_rx, _ = agreement(label_regex, COMPLAINTS)
+    print(f"Original scorer (given tokenising) : agree on {same} of {total} = {same / total:.1%}")
+    print(f"Regex-tokenised scorer             : agree on {same_rx} of {total} = {same_rx / total:.1%}")
+
+    print("\nPer-class agreement (original scorer):")
+    for cls in ("positive", "negative", "neutral"):
+        subset = [(t, m) for t, m in COMPLAINTS if m == cls]
+        s, n = agreement(label, subset)
+        print(f"  {cls:9} {s:>2} of {n:>2} = {s / n:.0%}")
+
+    print("\nComplaints the scorer labels differently from me:")
+    wrong = [(t, m, label(t)) for t, m in COMPLAINTS if label(t) != m]
+    for text, mine, got in wrong[:12]:
+        print(f"  mine={mine:8} scorer={got:8} | {text}")
+        print(f"      why: {diagnose(text)}")
+    if len(wrong) > 12:
+        print(f"  ... and {len(wrong) - 12} more")
+
+    reasons = Counter(diagnose(t).split(" (")[0].split(":")[0] for t, _, _ in wrong)
+    print("\nCauses of disagreement (counted):")
+    for reason, count in reasons.most_common():
+        print(f"  {count:>2} x {reason}")
+    return same / total
+
+
+# ---------------------------------------------------------------------------
+# B4.1: summariser comparison and complexity
+# ---------------------------------------------------------------------------
+def study_summarisers():
+    heading("B4.1: Summariser quality on the 58 complaints (k = 1 sentence)")
+    cov_f, cov_k, differ = [], [], 0
+    for text, _ in COMPLAINTS:
+        a, b = summarise_frequency(text), summarise_first_k(text)
+        cov_f.append(coverage(a, text))
+        cov_k.append(coverage(b, text))
+        differ += (a != b)
+    print(f"Mean important-word coverage, frequency method : {sum(cov_f) / len(cov_f):.3f}")
+    print(f"Mean important-word coverage, first-k method   : {sum(cov_k) / len(cov_k):.3f}")
+    print(f"Complaints where the two pick different sentences: {differ} of {len(COMPLAINTS)}")
+
+    print("\nExamples (frequency method | first-k method):")
+    shown = 0
+    for text, _ in COMPLAINTS:
+        a, b = summarise_frequency(text), summarise_first_k(text)
+        if a != b and shown < 3:
+            print(f"  full : {text}\n  freq : {a}\n  first: {b}\n")
+            shown += 1
+
+    heading("B4.1: Summariser time as the complaint grows (alternative-concept analysis)")
+    rng = random.Random(3)
+    subjects = ["bus", "platform", "toilet", "ticket counter", "lift", "waiting hall"]
+    problems = ["is dirty", "was slow", "is broken", "was crowded", "smells bad"]
+
+    def long_text(n_words):
+        parts, count = [], 0
+        while count < n_words:
+            s = f"The {rng.choice(subjects)} {rng.choice(problems)} on day {rng.randint(1, 30)}."
+            parts.append(s)
+            count += len(s.split())
+        return " ".join(parts)
+
+    print(f"{'words':>9} {'frequency (ms)':>16} {'first-k (ms)':>14} {'ratio':>10}")
+    print("-" * 53)
+    for n in (100, 1_000, 10_000, 100_000):
+        text = long_text(n)
+        reps = 20 if n <= 10_000 else 3
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            summarise_frequency(text)
+        t_freq = (time.perf_counter() - t0) / reps * 1000
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            summarise_first_k(text)
+        t_first = (time.perf_counter() - t0) / reps * 1000
+        print(f"{n:>9,} {t_freq:>16.4f} {t_first:>14.5f} {t_freq / max(t_first, 1e-9):>9,.0f}x")
+    print("""
+Time : frequency method reads every word, so it is O(words) (plus sorting the
+       sentence scores). First-k stops after k sentences, so it is O(k), which
+       is O(1) for a fixed k, however long the complaint is.
+Space: frequency method keeps a counter of distinct important words and a score
+       per sentence: O(unique words + sentences). First-k keeps only k
+       sentences: O(k).
+Trade-off: first-k is fastest but ignores content, so it can miss the
+       main problem when it is stated late. The frequency method costs more
+       time but selects the sentence most representative of the repeated topic.""")
+
+
+# ---------------------------------------------------------------------------
+# B4.2: database and index
+# ---------------------------------------------------------------------------
+def build_database(n_rows=300_000, n_stations=150, n_days=60, seed=7):
+    pool = [(text, to_label(score_regex(text)), score_regex(text)) for text, _ in COMPLAINTS]
+    rng = random.Random(seed)
+    conn = sqlite3.connect(":memory:")
+    conn.execute("""CREATE TABLE complaints (
+                        id INTEGER PRIMARY KEY, station INTEGER, day INTEGER,
+                        text TEXT, label TEXT, score INTEGER)""")
+
+    def rows():
+        for _ in range(n_rows):
+            text, lab, sc = pool[rng.randrange(len(pool))]
+            yield (rng.randrange(n_stations), rng.randrange(n_days), text, lab, sc)
+
+    conn.executemany(
+        "INSERT INTO complaints (station, day, text, label, score) VALUES (?,?,?,?,?)", rows())
+    conn.commit()
+    return conn
+
+
+QUERIES = {
+    "Q1 one station, one day": (
+        "SELECT COUNT(*), AVG(score) FROM complaints WHERE station = ? AND day = ?",
+        lambda r, ns, nd: (r.randrange(ns), r.randrange(nd))),
+    "Q2 daily trend of one station": (
+        "SELECT day, COUNT(*), AVG(score) FROM complaints WHERE station = ? "
+        "GROUP BY day ORDER BY day",
+        lambda r, ns, nd: (r.randrange(ns),)),
+    "Q3 worst days of a station (week)": (
+        "SELECT day, SUM(label = 'negative') AS neg FROM complaints "
+        "WHERE station = ? AND day BETWEEN ? AND ? GROUP BY day ORDER BY neg DESC LIMIT 5",
+        lambda r, ns, nd: (r.randrange(ns), (d := r.randrange(nd - 7)), d + 6)),
+}
+
+
+def time_queries(conn, n_stations, n_days, repeats=40):
+    results = {}
+    for name, (sql, make_params) in QUERIES.items():
+        rng = random.Random(11)                      # same parameters before and after
+        params = [make_params(rng, n_stations, n_days) for _ in range(repeats)]
+        start = time.perf_counter()
+        for p in params:
+            conn.execute(sql, p).fetchall()
+        results[name] = (time.perf_counter() - start) / repeats * 1000
+    return results
+
+
+def show_plan(conn, name):
+    sql, make_params = QUERIES[name]
+    params = make_params(random.Random(1), 150, 60)
+    for row in conn.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall():
+        print("   plan:", row[3])
+
+
+def study_database():
+    heading("B4.2: Effect of an index on (station, day)")
+    n_rows, n_stations, n_days = 300_000, 150, 60
+    conn = build_database(n_rows, n_stations, n_days)
+    print(f"Loaded {n_rows:,} complaints for {n_stations} stations over {n_days} days.\n")
+
+    before = time_queries(conn, n_stations, n_days)
+    slowest = max(before, key=before.get)
+    print(f"Slowest query before the index: {slowest} ({before[slowest]:.3f} ms)")
+    show_plan(conn, slowest)
+
+    start = time.perf_counter()
+    conn.execute("CREATE INDEX idx_station_day ON complaints (station, day)")
+    conn.commit()
+    build_time = (time.perf_counter() - start) * 1000
+    print(f"\nIndex built in {build_time:.1f} ms.")
+    after = time_queries(conn, n_stations, n_days)
+    show_plan(conn, slowest)
+
+    print(f"\n{'query':<36} {'before (ms)':>12} {'after (ms)':>12} {'speed-up':>10}")
+    print("-" * 74)
+    for name in QUERIES:
+        print(f"{name:<36} {before[name]:>12.3f} {after[name]:>12.3f} "
+              f"{before[name] / after[name]:>9.1f}x")
+    gain = before[slowest] / after[slowest]
+    print(f"\nSlowest query ({slowest}): {before[slowest]:.3f} ms -> "
+          f"{after[slowest]:.3f} ms, {gain:.1f}x faster.")
+    print("Without the index every query scans all rows (O(N)); with it, the "
+          "database jumps to the matching (station, day) entries (O(log N + matches)).")
+    conn.close()
+    return gain
+
+
+# ---------------------------------------------------------------------------
+# B4.3: cleaning, throughput and scale estimates
+# ---------------------------------------------------------------------------
+def clean_complaint(raw):
+    """Ingestion cleaning: trim, collapse whitespace, reject empty/too short text."""
+    if raw is None:
+        return None
+    text = re.sub(r"\s+", " ", str(raw)).strip()
+    return text if len(text) >= 5 else None
+
+
+def ingest(batch):
+    """Cleans a batch and removes exact duplicates using a set (O(n) average)."""
+    seen, clean, rejected, dupes = set(), [], 0, 0
+    for raw in batch:
+        text = clean_complaint(raw)
+        if text is None:
+            rejected += 1
+        elif text.lower() in seen:
+            dupes += 1
+        else:
+            seen.add(text.lower())
+            clean.append(text)
+    return clean, rejected, dupes
+
+
+def study_scale(agree_rate):
+    heading("B4.3: Production decision - evidence at the new scale")
+    messy = ["  Bus   was slow. ", None, "ok", "Bus was slow.", "Platform is DIRTY.", ""]
+    clean, rejected, dupes = ingest(messy)
+    print(f"Cleaning demo: {len(messy)} raw -> {len(clean)} kept, "
+          f"{rejected} rejected, {dupes} duplicate")
+
+    texts = [t for t, _ in COMPLAINTS]
+    batch = [texts[i % len(texts)] for i in range(50_000)]
+    start = time.perf_counter()
+    for t in batch:
+        score_regex(t)
+    scoring_time = time.perf_counter() - start
+    rate = len(batch) / scoring_time
+    print(f"\nScoring 50,000 complaints (one month): {scoring_time:.2f} s "
+          f"({rate:,.0f} complaints/s)")
+
+    avg_len = sum(len(t) for t in texts) / len(texts)
+    row_bytes = avg_len + 48
+    print(f"Complaint storage: about {row_bytes:.0f} bytes/row -> "
+          f"{50_000 * row_bytes / 1e6:.1f} MB/month, {12 * 50_000 * row_bytes / 1e6:.0f} MB/year")
+    readings = 100 * 96 * 30
+    print(f"Station readings from 100 new stations: 100 x 96 per day = {100 * 96:,}/day "
+          f"= {readings:,}/month")
+
+    print(f"\nEvidence summary:")
+    print(f"  * Scorer agreement with my reading: {agree_rate:.1%}")
+    print(f"  * Speed is not a problem: one month of complaints scores in {scoring_time:.1f} s")
+    print(f"  * Storage is small, so a single indexed SQL database is enough")
+
+    threshold = 0.85
+    print("\nDECISION")
+    print("  Storage : keep raw complaints unchanged in an SQL table, and store the cleaned text,")
+    print("            label and score in extra columns; add the (station, day) index;")
+    print("            readings go in a separate table with the same index.")
+    print("  Cleaning: clean at ingestion (trim, whitespace, empty-text rejection, duplicate")
+    print("            removal with a set) and log rejected rows rather than stopping.")
+    print("  Analysis: run scoring and summarising in a nightly batch, not per request.")
+    if agree_rate >= threshold:
+        print(f"  Method  : agreement {agree_rate:.1%} >= {threshold:.0%}, so the simple "
+              "lexicon methods are good enough.")
+    else:
+        print(f"  Method  : agreement {agree_rate:.1%} is below the {threshold:.0%} target, so the "
+              "lexicon is NOT good enough as the final judge.")
+        print("            Use it only as a fast first-pass filter. Most errors come from words missing")
+        print("            from the lexicon, negation scope and sarcasm, which a bigger word list")
+        print("            fixes only partly. Label a few thousand complaints, train a classifier,")
+        print("            and keep the lexicon score as a baseline to measure it against.")
+    print("  Summary : use the frequency summariser for the dashboard; keep first-k only as a fallback")
+    print("            for very long texts if time ever becomes a problem.")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main():
+    demo_expected_output()
+    agree_rate = study_agreement()
+    study_summarisers()
+    study_database()
+    study_scale(agree_rate)
+
+
+if __name__ == "__main__":
+    main()
